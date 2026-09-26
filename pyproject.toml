@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "payload-store"
+version = "1.0.0"
+description = "A tiny, dependency-free JSON document store served over loopback HTTP."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5", "mypy>=1.8"]
+
+[project.scripts]
+payload-store = "payload_store.cli:main"
+
+[tool.setuptools]
+packages = ["payload_store"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_redundant_casts = true
+warn_unused_ignores = false

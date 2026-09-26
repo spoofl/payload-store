@@ -1,0 +1,18 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Packaging / virtualenvs
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Local SQLite database files (including WAL sidecars)
+*.db
+*.db-wal
+*.db-shm
