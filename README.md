@@ -1,9 +1,7 @@
 # payload-store
 
-A tiny, dependency-free JSON document store served over loopback HTTP — a
-stdlib-only replacement for the payload-library feature's MongoDB backend
-(MongoDB Atlas is refused by the app's egress guard; loopback has no external
-destination to vet).
+A tiny, dependency-free JSON document store for payload libraries and shared
+workflow definitions, served over loopback HTTP and persisted in SQLite.
 
 ## Requirements
 
@@ -34,6 +32,54 @@ refused without it).
 
 With a token configured, every route except `/health` requires
 `Authorization: Bearer <token>`. Document bodies are round-tripped unchanged.
+
+`GET` and `HEAD` include a strong `ETag`. To create only when absent, send
+`If-None-Match: *` on `PUT`. To replace or delete the version you read, send its
+ETag in `If-Match`. The check and mutation run in one SQLite transaction; a
+stale precondition returns `412` without changing the document. Unconditional
+writes remain supported for existing payload clients. Only a single store ETag
+or `*` is accepted for `If-Match`, and only `*` for `If-None-Match`; unsupported
+or combined preconditions return `400`. `/health` advertises
+`"capabilities": ["conditionalWrites"]`.
+
+## Shared workflows
+
+The app uses the same server, bearer token, and database for both libraries.
+Payloads default to `payload-library/payloads/customPayloads`; workflows use
+`payload-library/workflows/definitions` (or the configured database). Workflow
+editing, duplication, deletion, and new runs read the shared definitions. Run
+history, schedules, investigation data, credentials, and execution state stay
+in the app's local workspace databases.
+
+The workflow document is a JSON object:
+
+```json
+{
+  "schema": "workflowLibrary/1",
+  "version": 1,
+  "definitions": [
+    {
+      "id": "evidence-review",
+      "revision": 1,
+      "name": "Evidence review",
+      "description": "Review existing evidence and write a report.",
+      "steps": [
+        {"id": "review", "title": "Review", "instructions": "Review the saved evidence."}
+      ]
+    }
+  ],
+  "imports": []
+}
+```
+
+The app validates the workflow schema and uses conditional writes to preserve
+concurrent edits. On first access it migrates existing local definitions,
+preserving conflicting local versions as separate imported workflows. Migration
+receipts in `imports` prevent repeated imports; preserve them when editing the
+document directly. An empty `definitions` array stays empty. The original local
+definitions remain as a backup. Clients refuse older servers without conditional
+write support instead of risking a lost update. Restart the server after updating
+its code; existing databases need no migration.
 
 ## Development
 

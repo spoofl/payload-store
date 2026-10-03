@@ -3,13 +3,14 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 from ._util import segment_is_safe
 from .config import MAX_BODY_BYTES
-from .store import DocumentStore
+from .store import DocumentStore, PreconditionFailed, document_etag
 
 log = logging.getLogger(__name__)
 
@@ -21,19 +22,17 @@ class Handler(BaseHTTPRequestHandler):
     store: DocumentStore
     auth_token: str | None
 
-    def _send_json(self, status: HTTPStatus, payload: dict) -> None:
+    def _send_json(self, status: HTTPStatus, payload: dict, etag: str | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        self._send_body(status, body, etag)
 
-    def _send_body(self, status: HTTPStatus, body: bytes) -> None:
+    def _send_body(self, status: HTTPStatus, body: bytes, etag: str | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if etag is not None:
+            self.send_header("ETag", etag)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -60,6 +59,19 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return database, collection, doc_id
 
+    def _preconditions(self) -> tuple[str | None, str | None]:
+        if_match = self.headers.get("If-Match")
+        if_none_match = self.headers.get("If-None-Match")
+        if (
+            len(self.headers.get_all("If-Match", [])) > 1
+            or len(self.headers.get_all("If-None-Match", [])) > 1
+            or (if_match is not None and not re.fullmatch(r'\*|"[0-9a-f]{64}"', if_match))
+            or if_none_match not in {None, "*"}
+            or (if_match is not None and if_none_match is not None)
+        ):
+            raise ValueError('Use one If-Match ETag (or *) or If-None-Match: *.')
+        return if_match, if_none_match
+
     def _read_json_body(self) -> tuple[str | None, str | None]:
         length_header = self.headers.get("Content-Length")
         if length_header is None:
@@ -75,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError as error:
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
             return None, f"Body is not valid JSON: {error}"
         if not isinstance(parsed, dict):
             return None, "Body must be a JSON object."
@@ -84,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         _, parts = self._route()
         if parts == ["health"]:
-            self._send_json(HTTPStatus.OK, {"status": "ok"})
+            self._send_json(HTTPStatus.OK, {"status": "ok", "capabilities": ["conditionalWrites"]})
             return
         if not self._authorized():
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
@@ -97,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        self._send_body(HTTPStatus.OK, body.encode("utf-8"))
+        self._send_body(HTTPStatus.OK, body.encode("utf-8"), document_etag(body))
 
     def do_HEAD(self) -> None:
         self.do_GET()
@@ -113,10 +125,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         body, error = self._read_json_body()
         if error is not None:
+            self.close_connection = True
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": error})
             return
-        updated = self.store.put(*key, body)
-        self._send_json(HTTPStatus.OK, {"status": "ok", "updatedAtMs": updated})
+        assert body is not None
+        try:
+            if_match, if_none_match = self._preconditions()
+            updated = self.store.put(*key, body, if_match=if_match, if_none_match=if_none_match)
+        except ValueError as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        except PreconditionFailed:
+            self._send_json(HTTPStatus.PRECONDITION_FAILED, {"error": "document changed"})
+            return
+        self._send_json(HTTPStatus.OK, {"status": "ok", "updatedAtMs": updated}, document_etag(body))
 
     def do_DELETE(self) -> None:
         if not self._authorized():
@@ -127,7 +149,15 @@ class Handler(BaseHTTPRequestHandler):
         if key is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown route"})
             return
-        removed = self.store.delete(*key)
+        try:
+            if_match, if_none_match = self._preconditions()
+            removed = self.store.delete(*key, if_match=if_match, if_none_match=if_none_match)
+        except ValueError as error:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        except PreconditionFailed:
+            self._send_json(HTTPStatus.PRECONDITION_FAILED, {"error": "document changed"})
+            return
         status = HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND
         self._send_json(status, {"status": "ok" if removed else "not found"})
 

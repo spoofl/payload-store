@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 
 from ._util import now_ms
+
+
+def document_etag(body: str) -> str:
+    return f'"{hashlib.sha256(body.encode("utf-8")).hexdigest()}"'
+
+
+class PreconditionFailed(Exception):
+    """The document changed since the caller read it."""
+
+
+def check_precondition(body: str | None, if_match: str | None, if_none_match: str | None) -> None:
+    if if_none_match == "*" and body is not None:
+        raise PreconditionFailed
+    if if_match is not None and (body is None or if_match not in {"*", document_etag(body)}):
+        raise PreconditionFailed
 
 
 class DocumentStore:
@@ -36,9 +52,19 @@ class DocumentStore:
             ).fetchone()
         return row[0] if row else None
 
-    def put(self, database: str, collection: str, doc_id: str, body: str) -> int:
+    def put(
+        self, database: str, collection: str, doc_id: str, body: str,
+        if_match: str | None = None, if_none_match: str | None = None,
+    ) -> int:
         updated = now_ms()
         with self._connect() as conn:
+            # The read and write must share the writer lock across server threads.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT body FROM documents WHERE db=? AND coll=? AND doc_id=?",
+                (database, collection, doc_id),
+            ).fetchone()
+            check_precondition(row[0] if row else None, if_match, if_none_match)
             conn.execute(
                 """
                 INSERT INTO documents (db, coll, doc_id, body, updated_at_ms)
@@ -50,8 +76,17 @@ class DocumentStore:
             )
         return updated
 
-    def delete(self, database: str, collection: str, doc_id: str) -> bool:
+    def delete(
+        self, database: str, collection: str, doc_id: str,
+        if_match: str | None = None, if_none_match: str | None = None,
+    ) -> bool:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT body FROM documents WHERE db=? AND coll=? AND doc_id=?",
+                (database, collection, doc_id),
+            ).fetchone()
+            check_precondition(row[0] if row else None, if_match, if_none_match)
             cur = conn.execute(
                 "DELETE FROM documents WHERE db=? AND coll=? AND doc_id=?",
                 (database, collection, doc_id),
