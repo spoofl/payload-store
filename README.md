@@ -1,7 +1,7 @@
 # payload-store
 
 A tiny, dependency-free JSON document store for payload libraries and shared
-workflow definitions, served over loopback HTTP and persisted in SQLite.
+workflow definitions and skill bundles, served over loopback HTTP and persisted in SQLite.
 
 ## Requirements
 
@@ -80,6 +80,52 @@ document directly. An empty `definitions` array stays empty. The original local
 definitions remain as a backup. Clients refuse older servers without conditional
 write support instead of risking a lost update. Restart the server after updating
 its code; existing databases need no migration.
+
+## Shared skills
+
+Skills use the same server, bearer token, and database, in
+`payload-library/skills/definitions` (or the configured database). The existing
+JSON document API and conditional-write support handle this library; no database
+migration or new server endpoint is needed.
+
+```json
+{
+  "schema": "skillLibrary/1",
+  "version": 1,
+  "definitions": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "revision": 1,
+      "content": "---\nname: evidence-review\ndescription: Review evidence\n---\nRead references/guide.md.",
+      "files": [
+        {"path": "references/guide.md", "contentBase64": "UmV2aWV3IHRoZSBldmlkZW5jZS4K", "executable": false}
+      ]
+    }
+  ]
+}
+```
+
+`content` is the complete UTF-8 `SKILL.md`, including YAML metadata; metadata is
+validated by the app rather than duplicated in other fields. Supporting files
+use relative paths, base64 content, and an executable flag. The app accepts up to
+200 skills, 60,000 characters per Markdown document, and 256 supporting files
+with at most 8 MiB of decoded resources per skill. The existing 64 MiB document
+limit also applies. Duplicate names, unsafe paths, symlinks, and unsupported
+schemas are rejected by the app.
+
+Create and edit skills from the app's Markdown editor. Valid edits autosave after
+600 ms of inactivity. Saves use the document ETag and a per-skill validator;
+stale edits retain the draft instead of overwriting another client's changes.
+Copying a workspace skill folder includes its supporting files; a flat Markdown
+file is copied on its own. Workspace overrides and packaged defaults remain
+local. Editing a packaged default creates a shared custom copy.
+
+The app caches validated library snapshots for offline use, scoped to the server
+and database. Shared edits require a reachable store. Agent runs keep their
+fetched revisions and install resources in their selected runner's filesystem;
+refreshing or deleting shared definitions does not change active snapshots.
+Empty libraries stay empty. Runtime traffic continues through the app's existing
+outbound identity guard, including resource inspection before base64 encoding.
 
 ## Development
 

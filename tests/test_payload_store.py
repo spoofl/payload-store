@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import threading
@@ -78,6 +79,17 @@ WORKFLOWS = {
 }
 
 
+SKILL_PATH = "/v1/documents/payload-library/skills/definitions"
+SKILLS = {
+    "schema": "skillLibrary/1", "version": 1,
+    "definitions": [{
+        "id": "0123456789abcdef0123456789abcdef", "revision": 1,
+        "content": "---\r\nname: review\r\ndescription: 'Review: 你好'\r\n---\r\n# Instructions\r\n",
+        "files": [{"path": "assets/example.bin", "contentBase64": "AAEC/w==", "executable": True}],
+    }],
+}
+
+
 class DocumentStoreHttpTest(unittest.TestCase):
     def setUp(self) -> None:
         self.fx = ServerFixture()
@@ -141,6 +153,34 @@ class DocumentStoreHttpTest(unittest.TestCase):
         self.assertEqual(json.loads(self.fx.request("GET", WORKFLOW_PATH)[1]), empty)
         self.assertEqual(json.loads(self.fx.request("GET", DOC_PATH)[1]), LIBRARY)
         self.assertEqual(self.fx.request("GET", WORKFLOW_PATH.replace("payload-library", "other"))[0], 404)
+
+    def test_skill_bundles_persist_exactly_and_are_isolated_from_other_libraries(self) -> None:
+        self.fx.request("PUT", DOC_PATH, json.dumps(LIBRARY).encode())
+        self.fx.request("PUT", WORKFLOW_PATH, json.dumps(WORKFLOWS).encode())
+        status, _, created = self.fx.response(
+            "PUT", SKILL_PATH, json.dumps(SKILLS).encode(), headers={"If-None-Match": "*"}
+        )
+        self.assertEqual(status, 200)
+        status, body, headers = self.fx.response("GET", SKILL_PATH)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), SKILLS)
+        self.assertEqual(headers["ETag"], created["ETag"])
+        resource = json.loads(body)["definitions"][0]["files"][0]
+        self.assertEqual(base64.b64decode(resource["contentBase64"]), bytes([0, 1, 2, 255]))
+        reopened = payload_store.DocumentStore(self.fx.server.RequestHandlerClass.store.db_path)
+        self.assertEqual(json.loads(reopened.get("payload-library", "skills", "definitions")), SKILLS)
+        empty = dict(SKILLS, definitions=[])
+        status, _, _ = self.fx.response(
+            "PUT", SKILL_PATH, json.dumps(empty).encode(), headers={"If-Match": headers["ETag"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(self.fx.response(
+            "PUT", SKILL_PATH, json.dumps(SKILLS).encode(), headers={"If-Match": headers["ETag"]}
+        )[0], 412)
+        self.assertEqual(json.loads(self.fx.request("GET", SKILL_PATH)[1]), empty)
+        self.assertEqual(json.loads(self.fx.request("GET", WORKFLOW_PATH)[1]), WORKFLOWS)
+        self.assertEqual(json.loads(self.fx.request("GET", DOC_PATH)[1]), LIBRARY)
+        self.assertEqual(self.fx.request("GET", SKILL_PATH.replace("payload-library", "other"))[0], 404)
 
     def test_conditional_creation_never_replaces_an_existing_library(self) -> None:
         headers = {"If-None-Match": "*"}
@@ -229,6 +269,15 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(self.fx.request("GET", WORKFLOW_PATH)[0], 401)
         self.assertEqual(self.fx.request("DELETE", WORKFLOW_PATH)[0], 401)
         self.assertEqual(json.loads(self.fx.request("GET", WORKFLOW_PATH, token="s3cret")[1]), WORKFLOWS)
+
+
+    def test_skill_reads_and_writes_require_the_same_token(self) -> None:
+        body = json.dumps(SKILLS).encode()
+        self.assertEqual(self.fx.request("PUT", SKILL_PATH, body)[0], 401)
+        self.assertEqual(self.fx.request("PUT", SKILL_PATH, body, token="s3cret")[0], 200)
+        self.assertEqual(self.fx.request("GET", SKILL_PATH)[0], 401)
+        self.assertEqual(self.fx.request("DELETE", SKILL_PATH)[0], 401)
+        self.assertEqual(json.loads(self.fx.request("GET", SKILL_PATH, token="s3cret")[1]), SKILLS)
 
 
 if __name__ == "__main__":
