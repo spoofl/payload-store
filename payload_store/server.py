@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import re
+import sqlite3
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
@@ -21,6 +22,13 @@ class Handler(BaseHTTPRequestHandler):
 
     store: DocumentStore
     auth_token: str | None
+
+    def _database_unavailable(self, error: sqlite3.Error) -> None:
+        log.error(
+            "Database unavailable (db=%s) for %s %s: %s",
+            self.store.db_path, self.command, self.path, error,
+        )
+        self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "database unavailable"})
 
     def _send_json(self, status: HTTPStatus, payload: dict, etag: str | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -98,6 +106,14 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["health"]:
             self._send_json(HTTPStatus.OK, {"status": "ok", "capabilities": ["conditionalWrites"]})
             return
+        if parts == ["ready"]:
+            try:
+                self.store.check_ready()
+            except sqlite3.Error as error:
+                self._database_unavailable(error)
+                return
+            self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
         if not self._authorized():
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
             return
@@ -105,7 +121,11 @@ class Handler(BaseHTTPRequestHandler):
         if key is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        body = self.store.get(*key)
+        try:
+            body = self.store.get(*key)
+        except sqlite3.Error as error:
+            self._database_unavailable(error)
+            return
         if body is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -138,6 +158,9 @@ class Handler(BaseHTTPRequestHandler):
         except PreconditionFailed:
             self._send_json(HTTPStatus.PRECONDITION_FAILED, {"error": "document changed"})
             return
+        except sqlite3.Error as error:
+            self._database_unavailable(error)
+            return
         self._send_json(HTTPStatus.OK, {"status": "ok", "updatedAtMs": updated}, document_etag(body))
 
     def do_DELETE(self) -> None:
@@ -157,6 +180,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         except PreconditionFailed:
             self._send_json(HTTPStatus.PRECONDITION_FAILED, {"error": "document changed"})
+            return
+        except sqlite3.Error as error:
+            self._database_unavailable(error)
             return
         status = HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND
         self._send_json(status, {"status": "ok" if removed else "not found"})

@@ -21,17 +21,32 @@ Flags: `--host` (`127.0.0.1`), `--port` (`8787`), `--db` (`./payload_store.db`),
 `--token` (or `PAYLOAD_STORE_TOKEN`), `--allow-external` (a non-loopback bind is
 refused without it).
 
+The database path can also be set with `PAYLOAD_STORE_DB`; `--db` takes precedence.
+Paths are expanded and resolved to an absolute path at startup, and the resolved
+path appears in the startup log. The parent directory must already exist. The
+server user needs read/write access to the database and any existing `-wal` and
+`-shm` files, plus write permission on the directory for SQLite's journal files.
+An unusable path stops startup with an actionable error.
+
 ## HTTP contract
 
 | Method | Path | Meaning |
 | --- | --- | --- |
 | `GET` | `/health` | liveness; no auth |
+| `GET` | `/ready` | database readiness; `200` when usable, otherwise `503`; no auth |
 | `GET` | `/v1/documents/{database}/{collection}/{id}` | return the stored JSON object, or `404` if absent |
 | `PUT` | `/v1/documents/{database}/{collection}/{id}` | replace-with-upsert; body must be a JSON object |
 | `DELETE` | `/v1/documents/{database}/{collection}/{id}` | remove the document |
 
-With a token configured, every route except `/health` requires
+With a token configured, document routes require
 `Authorization: Bearer <token>`. Document bodies are round-tripped unchanged.
+
+Database failures on document routes return `503` with
+`{"error":"database unavailable"}`; server logs include the absolute database
+path and SQLite's error. Requests can succeed again once access is restored.
+A missing database file is never recreated by a request. `/health` remains a
+liveness check; use `/ready` to verify the document schema and read/write access
+without modifying documents. `HEAD` also works on both checks.
 
 `GET` and `HEAD` include a strong `ETag`. To create only when absent, send
 `If-None-Match: *` on `PUT`. To replace or delete the version you read, send its

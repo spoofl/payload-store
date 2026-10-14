@@ -4,8 +4,10 @@ import argparse
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
+from pathlib import Path
 
 from ._util import is_loopback
 from .config import DEFAULT_DB_PATH, DEFAULT_HOST, DEFAULT_PORT
@@ -51,7 +53,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    store = DocumentStore(args.db)
+    try:
+        args.db = str(Path(args.db).expanduser().resolve())
+        store = DocumentStore(args.db)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        log.error(
+            "Cannot open database %r: %s. Ensure the parent directory exists and "
+            "the server user can read/write the database and its journal files, "
+            "and write to the directory.",
+            args.db, error,
+        )
+        return 1
     server = make_server(args.host, args.port, store, args.token)
 
     stop = threading.Event()
@@ -68,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         "Document store listening on http://%s:%s (db=%s, auth=%s)",
         host,
         port,
-        args.db,
+        store.db_path,
         "on" if args.token else "off",
     )
     try:

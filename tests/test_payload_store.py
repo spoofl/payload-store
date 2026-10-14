@@ -18,8 +18,8 @@ class ServerFixture:
     def __init__(self, token: str | None = None) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         db_path = str(Path(self._tmp.name) / "test.db")
-        store = payload_store.DocumentStore(db_path)
-        self.server = payload_store.make_server("127.0.0.1", 0, store, token)
+        self.store = payload_store.DocumentStore(db_path)
+        self.server = payload_store.make_server("127.0.0.1", 0, self.store, token)
         self.host, self.port = self.server.server_address[:2]
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
@@ -249,6 +249,11 @@ class AuthTest(unittest.TestCase):
     def test_health_needs_no_token(self) -> None:
         status, _ = self.fx.request("GET", "/health")
         self.assertEqual(status, 200)
+
+    def test_readiness_needs_no_token(self) -> None:
+        status, body = self.fx.request("GET", "/ready")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"status": "ok"})
 
     def test_document_requires_token(self) -> None:
         status, _ = self.fx.request("GET", DOC_PATH)
