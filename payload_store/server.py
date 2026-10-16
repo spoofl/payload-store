@@ -14,6 +14,7 @@ from .config import MAX_BODY_BYTES
 from .store import DocumentStore, PreconditionFailed, document_etag
 
 log = logging.getLogger(__name__)
+_LOG_CONTROL_CHARS = str.maketrans({c: f"\\x{c:02x}" for c in (*range(32), *range(127, 160))})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -188,7 +189,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(status, {"status": "ok" if removed else "not found"})
 
     def log_message(self, fmt: str, *args) -> None:
-        log.info("%s - %s", self.address_string(), fmt % args)
+        log.debug("%s %s", self.address_string(), (fmt % args).translate(_LOG_CONTROL_CHARS))
+
+    def log_error(self, fmt: str, *args) -> None:
+        # The base class sends protocol errors through log_message; keep them
+        # visible even when routine access logging is disabled.
+        log.error("%s %s", self.address_string(), (fmt % args).translate(_LOG_CONTROL_CHARS))
 
 
 def make_server(

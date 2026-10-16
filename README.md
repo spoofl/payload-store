@@ -13,13 +13,22 @@ Python 3.11+ standard library. Nothing to install to run it.
 python3 -m payload_store                              # 127.0.0.1:8787, ./payload_store.db
 python3 -m payload_store --port 8790 --db /var/lib/payloads.db
 PAYLOAD_STORE_TOKEN=s3cret python3 -m payload_store   # require a bearer token
+python3 -m payload_store --verbose                   # include HTTP request logs
 ```
 
 `pip install .` also provides a `payload-store` console command.
 
 Flags: `--host` (`127.0.0.1`), `--port` (`8787`), `--db` (`./payload_store.db`),
 `--token` (or `PAYLOAD_STORE_TOKEN`), `--allow-external` (a non-loopback bind is
-refused without it).
+refused without it), `-v` / `--verbose` (show HTTP request logs).
+
+Terminal output stays compact by default: two startup lines show the listening
+address, authentication status, and database path, followed only by shutdown or
+server errors. Routine requests, health checks, missing-document lookups, and
+conditional-write conflicts do not flood the terminal. Use `--verbose` when
+debugging HTTP traffic. Logs use short `HH:MM:SS LEVEL message` lines and do not
+clear the screen or take over the terminal. An occupied port produces a concise
+error instead of a traceback.
 
 The database path can also be set with `PAYLOAD_STORE_DB`; `--db` takes precedence.
 Paths are expanded and resolved to an absolute path at startup, and the resolved

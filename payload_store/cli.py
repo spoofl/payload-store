@@ -36,14 +36,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="permit binding a non-loopback address (off by default)",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="show HTTP request logs (default: startup, shutdown, and server errors only)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
     )
 
     if not is_loopback(args.host) and not args.allow_external:
@@ -64,7 +70,11 @@ def main(argv: list[str] | None = None) -> int:
             args.db, error,
         )
         return 1
-    server = make_server(args.host, args.port, store, args.token)
+    try:
+        server = make_server(args.host, args.port, store, args.token)
+    except OSError as error:
+        log.error("Cannot listen on %s:%s: %s", args.host, args.port, error)
+        return 1
 
     stop = threading.Event()
 
@@ -77,12 +87,12 @@ def main(argv: list[str] | None = None) -> int:
 
     host, port = server.server_address[:2]
     log.info(
-        "Document store listening on http://%s:%s (db=%s, auth=%s)",
+        "Listening on http://%s:%s | auth: %s | Ctrl+C to stop",
         host,
         port,
-        store.db_path,
         "on" if args.token else "off",
     )
+    log.info("Database: %s", store.db_path)
     try:
         server.serve_forever()
     finally:
