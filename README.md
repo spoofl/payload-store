@@ -1,7 +1,7 @@
 # payload-store
 
 A tiny, dependency-free JSON document store for payload libraries and shared
-workflow definitions and skill bundles, served over loopback HTTP and persisted in SQLite.
+workflow definitions, skill bundles, and submitted findings, served over loopback HTTP and persisted in SQLite.
 
 ## Requirements
 
@@ -141,6 +141,56 @@ fetched revisions and install resources in their selected runner's filesystem;
 refreshing or deleting shared definitions does not change active snapshots.
 Empty libraries stay empty. Runtime traffic continues through the app's existing
 outbound identity guard, including resource inspection before base64 encoding.
+
+## Submitted findings
+
+Submitted findings use the same server, bearer token, and configured database at
+`payload-library/findings/submitted`. The existing document API and conditional
+writes provide the shared ledger; no database migration or new endpoint is needed.
+This document is independent of payloads, workflows, skills, and workspace data.
+
+The app exposes **Evidence → Submitted findings** in every workspace. **Mark
+submitted** records a completed report with its submission time, optional report
+URL and notes, and a snapshot of the finding narrative and affected targets. It
+does not submit a report to a platform or change the finding's triage status.
+Local edits, recycling, and workspace resets or deletion leave the shared
+snapshot intact. Live captures and workspace run metadata are not copied.
+
+```json
+{
+  "schema": "submittedFindings/1",
+  "version": 1,
+  "findings": []
+}
+```
+
+Each entry has `id` (32 hexadecimal characters), `revision` (positive integer),
+`submittedAt` (Unix milliseconds), `reportUrl`, `notes`, `finding` (the saved
+finding object), `sourceKeys`, and `fingerprints`. `finding` retains the app's
+camelCase finding fields, including narrative, severity, CVSS, triage status,
+and a JSON-string `data` containing targets and impact. Capture references are
+not portable between workspaces and are not included as live attachments.
+
+The app derives opaque source keys from workspace provenance and the local
+finding ID. Fingerprints match normalized titles and categories plus affected
+HTTP method, host, and case-sensitive path/query. Repeated marks, matching
+findings in another workspace, and an identical report URL reuse an existing
+entry without replacing its report snapshot. Different wording or endpoints
+still require review: search the shared ledger before submitting. Agent tools
+support `findings` actions `list_submitted`, `get_submitted`, and `mark_submitted`.
+
+Writes use `If-None-Match: *` for creation or the current ETag in `If-Match` for
+updates. On a `412`, clients reread and merge before retrying, so concurrent
+workspaces preserve each other's submissions. Clearing submitted status removes
+the entry for all workspaces with a revision check, leaving local findings and
+external reports unchanged. An empty `findings` list remains empty. Preserve IDs,
+revisions, source keys, and fingerprints when managing this document directly.
+
+The app validates up to 10,000 records, 128 KiB per record, 100 target fingerprints
+and 1,000 source keys per record; the server's 64 MiB document limit also applies.
+An unavailable or malformed ledger is reported as an error, never as a successful
+empty duplicate check. Shared writes require a reachable store. The app's normal
+outbound identity guard applies to submission snapshots and transport metadata.
 
 ## Development
 
