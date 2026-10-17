@@ -1,0 +1,26 @@
+[Unit]
+Description=Payload document store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=payload-store
+Group=payload-store
+StateDirectory=payload-store
+WorkingDirectory=/var/lib/payload-store
+Environment=PY=/usr/bin/python3
+EnvironmentFile=/etc/payload-store/payload-store.env
+ExecStart=/opt/payload-store/run.sh --host 127.0.0.1 --port 8790 --db /var/lib/payload-store/payload_store.db
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

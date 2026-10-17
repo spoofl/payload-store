@@ -1,11 +1,12 @@
 .PHONY: help test run lint typecheck format install clean
 
 PY ?= python3
+ARGS ?=
 
 help:
 	@echo "Targets:"
 	@echo "  test      run the test suite"
-	@echo "  run       start the server (127.0.0.1:8787)"
+	@echo "  run       start ./run.sh (pass options with ARGS='...')"
 	@echo "  lint      ruff check (needs the dev extras)"
 	@echo "  typecheck mypy (needs the dev extras)"
 	@echo "  format    ruff format (needs the dev extras)"
@@ -16,7 +17,7 @@ test:
 	$(PY) -m unittest discover -s tests -v
 
 run:
-	$(PY) -m payload_store
+	@PY="$(PY)" ./run.sh $(ARGS)
 
 lint:
 	ruff check .

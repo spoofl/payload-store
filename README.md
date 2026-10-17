@@ -5,18 +5,33 @@ workflow definitions, skill bundles, and submitted findings, served over loopbac
 
 ## Requirements
 
-Python 3.11+ standard library. Nothing to install to run it.
+Python 3.11+ standard library, with Bash for `./run.sh`. No Python dependencies
+need to be installed.
 
 ## Run
 
 ```bash
-python3 -m payload_store                              # 127.0.0.1:8787, ./payload_store.db
-python3 -m payload_store --port 8790 --db /var/lib/payloads.db
-PAYLOAD_STORE_TOKEN=s3cret python3 -m payload_store   # require a bearer token
-python3 -m payload_store --verbose                   # include HTTP request logs
+./run.sh                              # 127.0.0.1:8787, ./payload_store.db
+./run.sh --port 8790 --db /var/lib/payloads.db
+PAYLOAD_STORE_TOKEN=s3cret ./run.sh    # require a bearer token
+./run.sh --verbose                    # include HTTP request logs
+./run.sh --help
 ```
 
-`pip install .` also provides a `payload-store` console command.
+The launcher runs in the foreground and passes all options to the Python CLI.
+It works from any directory without installing the package; relative database
+paths stay relative to your current directory. Set `PY=/path/to/python3` to
+select another Python interpreter. `make run` is an optional shortcut through
+the same launcher:
+
+```sh
+make run
+make run ARGS='--port 8790 --db "payload library.db"'
+make run ARGS='--help'
+```
+
+`python3 -m payload_store` remains available from the project directory or after
+installation. `pip install .` also provides a `payload-store` console command.
 
 Flags: `--host` (`127.0.0.1`), `--port` (`8787`), `--db` (`./payload_store.db`),
 `--token` (or `PAYLOAD_STORE_TOKEN`), `--allow-external` (a non-loopback bind is
@@ -36,6 +51,40 @@ path appears in the startup log. The parent directory must already exist. The
 server user needs read/write access to the database and any existing `-wal` and
 `-shm` files, plus write permission on the directory for SQLite's journal files.
 An unusable path stops startup with an actionable error.
+
+## Run as a service
+
+Install `run.sh` and `payload_store/` under `/opt/payload-store/`, keep `run.sh`
+executable (`chmod +x /opt/payload-store/run.sh`), and create a dedicated
+`payload-store` user. Create `/etc/payload-store/payload-store.env`, owned by
+root with mode `0600`, containing a nonempty, long random bearer token:
+
+```text
+PAYLOAD_STORE_TOKEN=replace-with-your-own-long-random-token
+```
+
+Systemd reads this required file and passes the token to the service. Install
+`payload-store.service` under `/etc/systemd/system/`, then enable it:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now payload-store
+sudo systemctl status payload-store
+```
+
+The unit uses Python 3.11+ at `/usr/bin/python3`; edit its `Environment=PY=...`
+line if your interpreter is elsewhere. It starts the same `run.sh` in the
+foreground and sends logs to the journal. Systemd handles background operation,
+startup on reboot, and restarts after failures. Use
+`sudo systemctl restart payload-store` after an update,
+`sudo systemctl stop payload-store` to stop it, and
+`journalctl -u payload-store -f` to follow logs.
+
+The service listens on `127.0.0.1:8790`, leaving port 8787 available for the
+relay, and stores data in `/var/lib/payload-store/payload_store.db`. Systemd
+creates the state directory with ownership for the service user. Publish the
+loopback listener through an HTTPS reverse proxy or reach it over an SSH tunnel.
+Use `/ready` to check database readiness and back up the persistent database.
 
 ## HTTP contract
 
@@ -205,7 +254,7 @@ outbound identity guard applies to submission snapshots and transport metadata.
 
 ```bash
 make test        # run the suite (real server on an ephemeral loopback port)
-make run         # start the server locally
+make run         # start the server locally through ./run.sh
 make install     # pip install -e ".[dev]"  (ruff + mypy)
 make lint        # ruff check .
 make typecheck   # mypy payload_store
